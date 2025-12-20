@@ -1,0 +1,8 @@
+﻿config.php
+admin/config.php
+*.pem
+*.key
+system/storage/cache/*
+system/storage/logs/*
+image/cache/*
+install/
