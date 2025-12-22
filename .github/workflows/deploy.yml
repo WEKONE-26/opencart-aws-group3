@@ -15,82 +15,58 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
       
-      - name: Configure SSH
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H 13.212.190.57 >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan -H 54.169.147.163 >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-southeast-1
       
-      - name: Test SSH Connection to EC2-A
+      - name: Deploy to EC2-A via SSM
         run: |
-          ssh -v -i ~/.ssh/id_rsa -o ConnectTimeout=10 ec2-user@13.212.190.57 "echo 'SSH connection successful!'"
+          echo "=== Deploying to EC2-A via SSM Session Manager ==="
+          
+          aws ssm send-command \
+            --instance-ids i-082cbe43b6ba19a6e \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "set -e",
+              "echo \"=== Deploying to EC2-A ===\"",
+              "sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S)",
+              "cd /tmp && rm -rf opencart-deployment",
+              "git clone https://github.com/WEKONE-26/opencart-aws-group3.git opencart-deployment",
+              "sudo rsync -av --exclude=config.php --exclude=admin/config.php --exclude=system/storage/ --exclude=image/ /tmp/opencart-deployment/ /var/www/html/",
+              "sudo chown -R apache:apache /var/www/html",
+              "sudo chmod -R 755 /var/www/html",
+              "sudo rm -rf /var/www/html/system/storage/cache/*",
+              "sudo rm -rf /var/www/html/system/storage/modification/*",
+              "sudo systemctl restart httpd",
+              "echo \"=== EC2-A deployment completed ===\""
+            ]' \
+            --region ap-southeast-1
       
-      - name: Deploy to EC2-A (Primary)
+      - name: Deploy to EC2-B via SSM
         run: |
-          ssh -i ~/.ssh/id_rsa ec2-user@13.212.190.57 << 'DEPLOY_EOF'
-          set -e
-          echo "=== Deploying to EC2-A ==="
+          echo "=== Deploying to EC2-B via SSM Session Manager ==="
           
-          # Backup current code
-          sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S)
-          
-          # Pull latest code from GitHub
-          cd /tmp
-          rm -rf opencart-deployment
-          git clone https://github.com/WEKONE-26/opencart-aws-group3.git opencart-deployment
-          
-          # Sync files (excluding config files)
-          sudo rsync -av --exclude='config.php' --exclude='admin/config.php' --exclude='system/storage/' --exclude='image/' /tmp/opencart-deployment/ /var/www/html/
-          
-          # Set permissions
-          sudo chown -R apache:apache /var/www/html
-          sudo chmod -R 755 /var/www/html
-          
-          # Clear OpenCart cache
-          sudo rm -rf /var/www/html/system/storage/cache/*
-          sudo rm -rf /var/www/html/system/storage/modification/*
-          
-          # Restart Apache
-          sudo systemctl restart httpd
-          
-          echo "=== EC2-A deployment completed ==="
-          DEPLOY_EOF
-      
-      - name: Deploy to EC2-B (Secondary)
-        run: |
-          ssh -i ~/.ssh/id_rsa ec2-user@54.169.147.163 << 'DEPLOY_EOF'
-          set -e
-          echo "=== Deploying to EC2-B ==="
-          
-          # Backup current code
-          sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S)
-          
-          # Pull latest code from GitHub
-          cd /tmp
-          rm -rf opencart-deployment
-          git clone https://github.com/WEKONE-26/opencart-aws-group3.git opencart-deployment
-          
-          # Sync files (excluding config files)
-          sudo rsync -av --exclude='config.php' --exclude='admin/config.php' --exclude='system/storage/' --exclude='image/' /tmp/opencart-deployment/ /var/www/html/
-          
-          # Set permissions
-          sudo chown -R apache:apache /var/www/html
-          sudo chmod -R 755 /var/www/html
-          
-          # Clear OpenCart cache
-          sudo rm -rf /var/www/html/system/storage/cache/*
-          sudo rm -rf /var/www/html/system/storage/modification/*
-          
-          # Restart Apache
-          sudo systemctl restart httpd
-          
-          echo "=== EC2-B deployment completed ==="
-          DEPLOY_EOF
+          aws ssm send-command \
+            --instance-ids i-02a745f790cb007a3 \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "set -e",
+              "echo \"=== Deploying to EC2-B ===\"",
+              "sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S)",
+              "cd /tmp && rm -rf opencart-deployment",
+              "git clone https://github.com/WEKONE-26/opencart-aws-group3.git opencart-deployment",
+              "sudo rsync -av --exclude=config.php --exclude=admin/config.php --exclude=system/storage/ --exclude=image/ /tmp/opencart-deployment/ /var/www/html/",
+              "sudo chown -R apache:apache /var/www/html",
+              "sudo chmod -R 755 /var/www/html",
+              "sudo rm -rf /var/www/html/system/storage/cache/*",
+              "sudo rm -rf /var/www/html/system/storage/modification/*",
+              "sudo systemctl restart httpd",
+              "echo \"=== EC2-B deployment completed ===\""
+            ]' \
+            --region ap-southeast-1
       
       - name: Deployment Summary
         if: always()
@@ -99,5 +75,5 @@ jobs:
           echo "Repository: WEKONE-26/opencart-aws-group3"
           echo "Branch: ${{ github.ref_name }}"
           echo "Commit: ${{ github.sha }}"
-          echo "Deployed to: EC2-A (13.212.190.57), EC2-B (54.169.147.163)"
+          echo "Deployed to: EC2-A (i-082cbe43b6ba19a6e), EC2-B (i-02a745f790cb007a3)"
           echo "ALB: Group3-OpenCart-ALB-1956877542.ap-southeast-1.elb.amazonaws.com"
