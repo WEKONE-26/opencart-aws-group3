@@ -22,8 +22,9 @@ jobs:
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H 13.212.190.57 >> ~/.ssh/known_hosts
-          ssh-keyscan -H 54.169.147.163 >> ~/.ssh/known_hosts
+          ssh-keyscan 13.212.190.57 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan 54.169.147.163 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
       
       - name: Deploy to EC2-A (Primary)
         run: |
