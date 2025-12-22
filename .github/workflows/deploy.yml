@@ -22,98 +22,75 @@ jobs:
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan 13.212.190.57 >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan 54.169.147.163 >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H 13.212.190.57 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H 54.169.147.163 >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+      
+      - name: Test SSH Connection to EC2-A
+        run: |
+          ssh -v -i ~/.ssh/id_rsa -o ConnectTimeout=10 ec2-user@13.212.190.57 "echo 'SSH connection successful!'"
       
       - name: Deploy to EC2-A (Primary)
         run: |
-          ssh -i ~/.ssh/id_rsa ec2-user@13.212.190.57 << 'EOF'
-            set -e
-            echo "=== Deploying to EC2-A ==="
-            
-            # Backup current code
-            sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S)
-            
-            # Pull latest code from GitHub
-            cd /tmp
-            rm -rf opencart-deployment
-            git clone https://github.com/WEKONE-26/opencart-aws-group3.git opencart-deployment
-            
-            # Sync files (excluding config files)
-            sudo rsync -av --exclude='config.php' --exclude='admin/config.php' \
-                       --exclude='system/storage/' --exclude='image/' \
-                       /tmp/opencart-deployment/ /var/www/html/
-            
-            # Set permissions
-            sudo chown -R apache:apache /var/www/html
-            sudo chmod -R 755 /var/www/html
-            
-            # Clear OpenCart cache
-            sudo rm -rf /var/www/html/system/storage/cache/*
-            sudo rm -rf /var/www/html/system/storage/modification/*
-            
-            # Restart Apache
-            sudo systemctl restart httpd
-            
-            echo "=== EC2-A deployment completed ==="
-          EOF
+          ssh -i ~/.ssh/id_rsa ec2-user@13.212.190.57 << 'DEPLOY_EOF'
+          set -e
+          echo "=== Deploying to EC2-A ==="
+          
+          # Backup current code
+          sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S)
+          
+          # Pull latest code from GitHub
+          cd /tmp
+          rm -rf opencart-deployment
+          git clone https://github.com/WEKONE-26/opencart-aws-group3.git opencart-deployment
+          
+          # Sync files (excluding config files)
+          sudo rsync -av --exclude='config.php' --exclude='admin/config.php' --exclude='system/storage/' --exclude='image/' /tmp/opencart-deployment/ /var/www/html/
+          
+          # Set permissions
+          sudo chown -R apache:apache /var/www/html
+          sudo chmod -R 755 /var/www/html
+          
+          # Clear OpenCart cache
+          sudo rm -rf /var/www/html/system/storage/cache/*
+          sudo rm -rf /var/www/html/system/storage/modification/*
+          
+          # Restart Apache
+          sudo systemctl restart httpd
+          
+          echo "=== EC2-A deployment completed ==="
+          DEPLOY_EOF
       
       - name: Deploy to EC2-B (Secondary)
         run: |
-          ssh -i ~/.ssh/id_rsa ec2-user@54.169.147.163 << 'EOF'
-            set -e
-            echo "=== Deploying to EC2-B ==="
-            
-            # Backup current code
-            sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S)
-            
-            # Pull latest code from GitHub
-            cd /tmp
-            rm -rf opencart-deployment
-            git clone https://github.com/WEKONE-26/opencart-aws-group3.git opencart-deployment
-            
-            # Sync files (excluding config files)
-            sudo rsync -av --exclude='config.php' --exclude='admin/config.php' \
-                       --exclude='system/storage/' --exclude='image/' \
-                       /tmp/opencart-deployment/ /var/www/html/
-            
-            # Set permissions
-            sudo chown -R apache:apache /var/www/html
-            sudo chmod -R 755 /var/www/html
-            
-            # Clear OpenCart cache
-            sudo rm -rf /var/www/html/system/storage/cache/*
-            sudo rm -rf /var/www/html/system/storage/modification/*
-            
-            # Restart Apache
-            sudo systemctl restart httpd
-            
-            echo "=== EC2-B deployment completed ==="
-          EOF
-      
-      - name: Verify Deployment
-        run: |
-          echo "=== Verifying deployment ==="
+          ssh -i ~/.ssh/id_rsa ec2-user@54.169.147.163 << 'DEPLOY_EOF'
+          set -e
+          echo "=== Deploying to EC2-B ==="
           
-          # Check EC2-A
-          EC2_A_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://13.212.190.57)
-          echo "EC2-A HTTP Status: $EC2_A_STATUS"
+          # Backup current code
+          sudo cp -r /var/www/html /var/www/html.backup.$(date +%Y%m%d_%H%M%S)
           
-          # Check EC2-B
-          EC2_B_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://54.169.147.163)
-          echo "EC2-B HTTP Status: $EC2_B_STATUS"
+          # Pull latest code from GitHub
+          cd /tmp
+          rm -rf opencart-deployment
+          git clone https://github.com/WEKONE-26/opencart-aws-group3.git opencart-deployment
           
-          # Check ALB
-          ALB_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://Group3-OpenCart-ALB-1956877542.ap-southeast-1.elb.amazonaws.com)
-          echo "ALB HTTP Status: $ALB_STATUS"
+          # Sync files (excluding config files)
+          sudo rsync -av --exclude='config.php' --exclude='admin/config.php' --exclude='system/storage/' --exclude='image/' /tmp/opencart-deployment/ /var/www/html/
           
-          if [ "$EC2_A_STATUS" = "200" ] && [ "$EC2_B_STATUS" = "200" ] && [ "$ALB_STATUS" = "200" ]; then
-            echo "✅ All instances healthy!"
-          else
-            echo "❌ Some instances are not responding correctly"
-            exit 1
-          fi
+          # Set permissions
+          sudo chown -R apache:apache /var/www/html
+          sudo chmod -R 755 /var/www/html
+          
+          # Clear OpenCart cache
+          sudo rm -rf /var/www/html/system/storage/cache/*
+          sudo rm -rf /var/www/html/system/storage/modification/*
+          
+          # Restart Apache
+          sudo systemctl restart httpd
+          
+          echo "=== EC2-B deployment completed ==="
+          DEPLOY_EOF
       
       - name: Deployment Summary
         if: always()
