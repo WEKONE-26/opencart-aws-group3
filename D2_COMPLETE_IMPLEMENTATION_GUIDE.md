@@ -2198,24 +2198,310 @@ exit
 
 **⏱️ HOUR 3-4 TOTAL TIME:** 15-25 minutes (depending on if AMI needs recreation)
 
-**⏭️ NEXT:** HOUR 4-5 - Create Application Load Balancer & Configure Multi-AZ Routing
+**⏭️ NEXT:** HOUR 4-5 - Create Application Load Balancer & Auto Scaling Group
 
 ---
 
-#### 📌 **HOUR 4-5: Create Application Load Balancer** `[14:00-15:00]`
+#### 📌 **HOUR 4-5: Create Application Load Balancer & Auto Scaling** `[14:00-15:00]`
 
 **🎯 OBJECTIVES:**
-- ✅ Create Target Group to register EC2 instances
+- ✅ Create Launch Template from EC2-A (for auto-scaling)
+- ✅ Create Auto Scaling Group (min: 1, desired: 2, max: 4 instances)
+- ✅ Create Target Group for ALB routing
 - ✅ Create Multi-AZ Application Load Balancer
+- ✅ Configure Scaling Policies (CPU-based auto-scaling)
 - ✅ Update Security Groups for ALB routing
 - ✅ Configure DNS URLs in OpenCart config files
-- ✅ Test load balancing across both AZs
+- ✅ Test load balancing & auto-scaling
+
+**⏰ TIME BREAKDOWN:**
+- STEP 0: Create Launch Template (5 minutes)
+- STEP 1: Create Auto Scaling Group (8 minutes)
+- STEP 2: Create Target Group (3 minutes)
+- STEP 3: Create ALB (5 minutes)
+- STEP 4: Update Security Groups (3 minutes)
+- STEP 5: Update Config.php (5 minutes)
+- STEP 6: Test Load Balancing & Scaling (5 minutes)
 
 ---
 
-**📋 STEP 1: CREATE TARGET GROUP** (2-3 minutes)
+## **📋 STEP 0: CREATE LAUNCH TEMPLATE** (5 minutes)
 
-**🎯 Purpose:** Target Group is the "pool" of EC2 instances that ALB will distribute traffic to
+**🎯 Purpose:** Define instance template for Auto Scaling Group to automatically launch new EC2s
+
+**Why:** Instead of fixed 2 EC2s, Auto Scaling will:
+- Automatically scale to 3-4 instances under high load
+- Scale back to 2 instances when load decreases
+- Replace unhealthy instances automatically
+
+**1. Get EC2-A Details:**
+
+```
+AWS Console → EC2 → Instances → Select EC2-A
+Note down:
+├─ AMI ID: ami-xxxxxxxx (click "AMI ID" to see)
+├─ Instance Type: t2.micro
+├─ Security Groups: Group3_WebServer_SG
+├─ Key Pair: project.pem
+└─ IAM Role: (if assigned)
+```
+
+**2. Create Launch Template from EC2-A:**
+
+```
+AWS Console → EC2 → Launch Templates
+→ Click "Create launch template"
+```
+
+**3. Basic Details:**
+
+```
+Launch template name: Group3-OpenCart-Template
+Description: OpenCart web server for auto-scaling
+
+Source template: None (create from scratch, or select EC2-A instance)
+```
+
+**4. Instance Configuration:**
+
+```
+AMI: Same as EC2-A (ami-xxxxxxxx)
+Instance type: t2.micro
+Key pair: project.pem
+
+Network settings:
+├─ Security groups: Group3_WebServer_SG
+└─ ⚠️ Do NOT specify Subnet! (ASG will manage this)
+
+User data (optional, but recommended):
+├─ Add script to auto-start services
+└─ Copy from EC2-A: /var/www/html setup already done
+```
+
+**5. Storage:**
+
+```
+Volume 1 (Root):
+├─ Device name: /dev/xvda
+├─ Size: 8 GB (same as EC2-A)
+├─ Volume type: gp2
+└─ Delete on termination: Yes
+```
+
+**6. Resource Tags:**
+
+```
+Add tags:
+├─ Name: Group3-OpenCart-Instance
+├─ Project: Group3-OpenCart
+├─ Environment: production
+└─ ManagedBy: AutoScaling
+```
+
+**7. Click "Create launch template"**
+
+**✅ Expected:**
+```
+✅ Launch template created: Group3-OpenCart-Template
+✅ Version 1 is default
+```
+
+---
+
+## **📋 STEP 1: CREATE AUTO SCALING GROUP** (8 minutes)
+
+**🎯 Purpose:** Automatically scale EC2 instances based on demand
+
+**1. Create ASG:**
+
+```
+AWS Console → EC2 → Auto Scaling Groups
+→ Click "Create Auto Scaling group"
+```
+
+**2. Step 1 - Choose Launch Template:**
+
+```
+Name: Group3-OpenCart-ASG
+
+Launch template: Group3-OpenCart-Template ✅
+Version: Latest (or $Latest)
+
+Click: "Next"
+```
+
+**3. Step 2 - Network & Subnets:**
+
+```
+VPC: Group3_VPC ✅
+
+Subnets (SELECT BOTH for Multi-AZ!):
+├─ ✅ Group3_PublicSubnet_A (ap-southeast-1a)
+└─ ✅ Group3_PublicSubnet_B (ap-southeast-1b)
+
+⚠️ If you only select one → NOT Multi-AZ!
+
+Click: "Next"
+```
+
+**4. Step 3 - Load Balancer Integration:**
+
+```
+Attach to load balancer: ⦿ Yes ✅
+
+Choose target groups: Group3-OpenCart-TG
+(We'll create this next, but select it here)
+
+Monitoring:
+├─ ☑ Enable group metrics collection within CloudWatch
+└─ ☑ Default health check: ELB (from load balancer)
+
+VPC Latency: Default
+
+Click: "Next"
+```
+
+**5. Step 4 - Configure Group Size:**
+
+```
+CRITICAL SETTINGS:
+
+Desired capacity: 2 instances
+  └─ At any time, maintain 2 healthy instances
+
+Minimum capacity: 1 instance
+  └─ Never go below 1 (cost-saving: if traffic drops)
+
+Maximum capacity: 4 instances
+  └─ Never exceed 4 (cost-control: expensive if runaway)
+
+⚠️ REMEMBER: Desired = current, Min = safety floor, Max = ceiling
+
+Capacity type: ⦿ On-Demand instances (not Spot)
+
+Click: "Next"
+```
+
+**6. Step 5 - Add Notifications (Optional):**
+
+```
+Add notification: (OPTIONAL)
+└─ SNS topic: Group3-CloudWatch-Alerts
+   └─ Events: Instance Launch, Terminate, etc.
+
+This sends email when scaling happens (nice for monitoring)
+
+Click: "Next"
+```
+
+**7. Step 6 - Add Tags:**
+
+```
+Tags:
+├─ Name: Group3-OpenCart-Instance
+├─ Project: Group3-OpenCart
+├─ Environment: production
+└─ Propagate to instances: ✅ YES
+
+This tags all instances launched by ASG
+
+Click: "Next"
+```
+
+**8. Review and Create:**
+
+```
+Summary:
+├─ Name: Group3-OpenCart-ASG ✅
+├─ Template: Group3-OpenCart-Template ✅
+├─ Subnets: 1a + 1b ✅
+├─ Desired: 2, Min: 1, Max: 4 ✅
+├─ Target Group: Group3-OpenCart-TG ✅
+└─ Click "Create Auto Scaling group"
+```
+
+**✅ Expected:**
+```
+✅ Auto Scaling group created: Group3-OpenCart-ASG
+✅ Current instances: 2 (launching)
+✅ Wait 2-3 minutes for instances to launch
+✅ Check: AWS Console → EC2 → Instances
+   └─ Should see 2 new EC2s launching automatically!
+```
+
+**⚠️ Important:** The ASG will now manage EC2 instances. Never manually terminate instances launched by ASG!
+
+---
+
+## **📋 STEP 1.5: CREATE SCALING POLICIES** (5 minutes)
+
+**🎯 Purpose:** Automatically add/remove instances based on CPU load
+
+**1. Go to ASG:**
+
+```
+AWS Console → Auto Scaling Groups
+→ Select: Group3-OpenCart-ASG
+→ Automatic Scaling tab
+```
+
+**2. Create Target Tracking Scaling Policy:**
+
+```
+Click: "Create policy"
+
+Policy name: Group3-OpenCart-CPU-Scaling
+Policy type: ⦿ Target tracking scaling
+
+Target type: CPU Utilization
+Target value: 70%
+  └─ Keep CPU at 70% (scale up if > 70%, scale down if < 70%)
+
+Instances warm-up time: 300 seconds (5 minutes)
+  └─ Wait 5 min after launch before adding to load balancing
+
+Click: "Create"
+```
+
+**How it works:**
+```
+Example 1: Low Traffic (5% CPU)
+├─ Current: 2 instances
+├─ Target: 70% CPU
+├─ Action: Scale DOWN to 1 instance (save $14/month)
+└─ Wait 5 minutes before terminating
+
+Example 2: High Traffic (85% CPU)
+├─ Current: 2 instances
+├─ Target: 70% CPU
+├─ Action: Scale UP to 3 instances (add CPU capacity)
+└─ New instance joins load balancer
+
+Example 3: Very High Traffic (90% CPU with 3 instances)
+├─ Current: 3 instances
+├─ Target: 70% CPU
+├─ Action: Scale UP to 4 instances (max limit)
+└─ After 4 instances, even if CPU > 70%, won't scale (max = 4)
+```
+
+**✅ Verification:**
+
+```
+Auto Scaling Groups → Group3-OpenCart-ASG
+→ Automatic Scaling tab
+
+Should show:
+├─ Policy: Group3-OpenCart-CPU-Scaling
+├─ Type: Target Tracking
+├─ Target: CPU Utilization = 70%
+└─ State: Active ✅
+```
+
+---
+
+**📋 STEP 2: CREATE TARGET GROUP** (2-3 minutes)
+
+**🎯 Purpose:** Target Group is the "pool" where ALB will route traffic (ASG instances join this group automatically)
 
 **1. Open AWS Console:**
 ```
@@ -2236,7 +2522,7 @@ Protocol: HTTP (not HTTPS yet)
 Port: 80
 
 VPC: Group3_VPC ✅
-  └─ Must match your EC2 instances' VPC!
+  └─ Must match your Auto Scaling Group's VPC!
 
 Protocol version: HTTP1 (leave default)
 ```
@@ -2246,64 +2532,54 @@ Protocol version: HTTP1 (leave default)
 ```
 Health check protocol: HTTP
 Health check path: /
-  └─ ALB will regularly request "/" to check if EC2 is alive
+  └─ ALB will regularly request "/" to check if instance is alive
 
 Advanced health check settings:
 ├─ Healthy threshold: 2
-│  └─ EC2 must pass 2 consecutive health checks to be "Healthy"
+│  └─ Instance must pass 2 consecutive health checks to be "Healthy"
 │
 ├─ Unhealthy threshold: 3
-│  └─ EC2 marked "Unhealthy" after 3 failed checks
+│  └─ Instance marked "Unhealthy" after 3 failed checks
 │
 ├─ Timeout: 5 seconds
 │  └─ Wait max 5 sec for response
 │
 ├─ Interval: 30 seconds
-│  └─ Check every 30 seconds (so every 2.5 minutes total wait before marking unhealthy)
+│  └─ Check every 30 seconds
 │
 └─ Success codes: 200
-   └─ Only HTTP 200 counts as "healthy" (not 301, 404, etc.)
+   └─ Only HTTP 200 counts as "healthy"
 ```
 
 **4. Step 3 - Register targets:**
 
 ```
-Available instances:
-├─ ☑ Group3_WebServer1 (EC2-A) - i-082cbe43b6ba19a6e
-└─ ☑ Group3_WebServer2 (EC2-B) - i-XXXXXXX
+⚠️ DON'T register manually!
 
-Port: 80 (for both)
+Auto Scaling Group will automatically add instances to this target group!
 
-Click: "Include as pending below"
+Just skip this step.
+
+Click: "Create target group"
 ```
-
-**5. Click "Create target group"**
 
 **✅ Expected:**
 ```
 ✅ Target Group created: Group3-OpenCart-TG
-✅ 2 targets pending
-✅ Status will change to "Healthy" within 30-60 seconds
+✅ No targets yet (ASG will add them automatically)
+✅ Status will show targets within 30-60 seconds after ASG launches instances
 
-Wait for:
+Within 2 minutes:
 Target Groups → Group3-OpenCart-TG → Targets tab
-├─ EC2-A: Status = Healthy ✅ (green checkmark)
-└─ EC2-B: Status = Healthy ✅ (green checkmark)
+├─ Instance 1 (ASG-launched): Status = Healthy ✅
+└─ Instance 2 (ASG-launched): Status = Healthy ✅
 ```
-
-**❌ If targets show "Unhealthy":**
-
-| Issue | Check | Solution |
-|-------|-------|----------|
-| Status: `Unhealthy` | HTTP 200 response | Verify Apache running on EC2s: `sudo systemctl status httpd` |
-| Status: `Unused` | Not registered | Go back to Step 3, register both EC2s |
-| Health check timeout | Network/Security Group | EC2 SG should allow HTTP (80) from ALB SG (will fix in Step 3) |
 
 ---
 
-**📋 STEP 2: CREATE APPLICATION LOAD BALANCER** (3-5 minutes)
+**📋 STEP 3: CREATE APPLICATION LOAD BALANCER** (3-5 minutes)
 
-**🎯 Purpose:** ALB distributes traffic across both EC2 instances in different AZs
+**🎯 Purpose:** ALB distributes traffic across Auto Scaling Group instances in different AZs
 
 **1. Create ALB:**
 
@@ -2333,13 +2609,13 @@ VPC: Group3_VPC ✅
 
 Availability Zones (MUST select BOTH!):
 ├─ ✅ ap-southeast-1a → Group3_PublicSubnet_A
-│  └─ This is where EC2-A is
+│  └─ ASG will launch instances here
 │
 └─ ✅ ap-southeast-1b → Group3_PublicSubnet_B
-   └─ This is where EC2-B is
+   └─ ASG will launch instances here
 
 ⚠️ If you only select one AZ → NOT Multi-AZ! ❌
-⚠️ Both must be checked!
+⚠️ Both must be checked for ASG to work properly!
 ```
 
 **4. Security groups:**
@@ -2363,7 +2639,7 @@ Outbound rules:
 Add listener:
 ├─ Protocol: HTTP
 ├─ Port: 80
-├─ Default action: Forward to → Group3-OpenCart-TG
+├─ Default action: Forward to → Group3-OpenCart-TG ✅
 └─ Click "Add"
 ```
 
@@ -2391,10 +2667,10 @@ Copy DNS name for next steps!
 
 ---
 
-**📋 STEP 3: UPDATE SECURITY GROUPS** ⚠️ CRITICAL STEP
+**📋 STEP 4: UPDATE SECURITY GROUPS** ⚠️ CRITICAL STEP
 
 **Problem:** EC2s currently accept HTTP from 0.0.0.0/0 (old Day 1 setup)
-Now they should ONLY accept from ALB! Otherwise ALB becomes pointless.
+Now they should ONLY accept from ALB! Otherwise security is compromised.
 
 **Solution:**
 
@@ -2432,11 +2708,11 @@ Group3_WebServer_SG inbound rules should now show:
 
 ---
 
-**📋 STEP 4: UPDATE CONFIG.PHP** 🚨 MOST CRITICAL STEP!
+**📋 STEP 5: UPDATE CONFIG.PHP** 🚨 MOST CRITICAL STEP!
 
 **⚠️ WHY THIS STEP MATTERS:**
 
-Without this, OpenCart still thinks it's on EC2-A IP (13.229.212.148), so:
+Without this, OpenCart still thinks it's on EC2 IP, so:
 - CSS/JS files fail to load (404 errors)
 - Images broken
 - Admin panel might not work properly
@@ -2446,7 +2722,7 @@ Without this, OpenCart still thinks it's on EC2-A IP (13.229.212.148), so:
 
 **Solution:** Update config.php to use ALB DNS instead of EC2 IP
 
-**STEP 4A: Get ALB DNS:**
+**STEP 5A: Get ALB DNS:**
 
 ```
 AWS Console → Load Balancers
@@ -2454,10 +2730,17 @@ AWS Console → Load Balancers
 → Copy DNS name: Group3-OpenCart-ALB-1956877542.ap-southeast-1.elb.amazonaws.com
 ```
 
-**STEP 4B: Update EC2-A config:**
+**STEP 5B: Update instances via Auto Scaling:**
+
+⚠️ Since instances are managed by ASG, we need to update the Launch Template so future instances have correct config!
+
+But for now, quickly update the existing instances:
 
 ```bash
-ssh -i project.pem ec2-user@13.229.212.148
+# Get instance IPs from AWS Console
+# SSH to first ASG instance and update config.php
+
+ssh -i project.pem ec2-user@[INSTANCE_IP]
 
 # Backup BEFORE editing!
 sudo cp /var/www/html/config.php /var/www/html/config.php.backup.$(date +%s)
@@ -2467,22 +2750,22 @@ sudo cp /var/www/html/admin/config.php /var/www/html/admin/config.php.backup.$(d
 sudo nano /var/www/html/config.php
 
 # Find these lines (usually around line 12-15):
-define('HTTP_SERVER', 'http://13.229.212.148/');
-define('HTTPS_SERVER', 'http://13.229.212.148/');
+define('HTTP_SERVER', 'http://[OLD_IP]/');
+define('HTTPS_SERVER', 'http://[OLD_IP]/');
 
-# Replace with ALB DNS (NOTE: Replace XXXXX with your actual ALB DNS!):
+# Replace with ALB DNS:
 define('HTTP_SERVER', 'http://Group3-OpenCart-ALB-1956877542.ap-southeast-1.elb.amazonaws.com/');
 define('HTTPS_SERVER', 'http://Group3-OpenCart-ALB-1956877542.ap-southeast-1.elb.amazonaws.com/');
 
-# Save: Press Ctrl+X, then Y, then Enter
+# Save: Ctrl+X, Y, Enter
 
 # Edit admin config.php  
 sudo nano /var/www/html/admin/config.php
 
 # Find these 3 lines (around line 12-20):
-define('HTTP_SERVER', 'http://13.229.212.148/admin/');
-define('HTTPS_SERVER', 'http://13.229.212.148/admin/');
-define('HTTP_CATALOG', 'http://13.229.212.148/');
+define('HTTP_SERVER', 'http://[OLD_IP]/admin/');
+define('HTTPS_SERVER', 'http://[OLD_IP]/admin/');
+define('HTTP_CATALOG', 'http://[OLD_IP]/');
 
 # Replace ALL 3 with:
 define('HTTP_SERVER', 'http://Group3-OpenCart-ALB-1956877542.ap-southeast-1.elb.amazonaws.com/admin/');
@@ -2491,43 +2774,17 @@ define('HTTP_CATALOG', 'http://Group3-OpenCart-ALB-1956877542.ap-southeast-1.elb
 
 # Save: Ctrl+X, Y, Enter
 
-# Restart Apache to apply changes
-sudo systemctl restart httpd
-
-# Verify restart successful
-sudo systemctl status httpd
-# Should show: active (running) ✅
-
-exit
-```
-
-**STEP 4C: Update EC2-B config (SAME changes!):**
-
-```bash
-# Get EC2-B public IP from AWS Console
-ssh -i project.pem ec2-user@<EC2_B_PUBLIC_IP>
-
-# Backup configs
-sudo cp /var/www/html/config.php /var/www/html/config.php.backup.$(date +%s)
-sudo cp /var/www/html/admin/config.php /var/www/html/admin/config.php.backup.$(date +%s)
-
-# Edit main config - SAME changes as EC2-A
-sudo nano /var/www/html/config.php
-# Change lines 12-15 to use ALB DNS
-
-# Edit admin config - SAME changes as EC2-A
-sudo nano /var/www/html/admin/config.php
-# Change lines 12-20 to use ALB DNS
-
 # Restart Apache
 sudo systemctl restart httpd
 
 exit
 ```
 
+**Repeat for second ASG instance**
+
 ---
 
-**📋 STEP 5: TEST LOAD BALANCING** ✅
+**📋 STEP 6: TEST LOAD BALANCING & AUTO SCALING** ✅
 
 **TEST 1: Access via ALB DNS:**
 
@@ -2558,43 +2815,62 @@ Expected:
 **TEST 3: Verify Load Balancing (Round Robin):**
 
 ```
-1. SSH to EC2-A, check Apache access log:
-   ssh -i project.pem ec2-user@13.229.212.148
-   tail -f /var/log/httpd/access_log &
-   exit
+ALB automatically distributes traffic 50/50 across instances.
 
-2. Refresh ALB page multiple times (10 times)
-3. Check which EC2 IP logged requests (should alternate!)
-
-Expected pattern:
-├─ Request 1 → logged by 10.0.1.xxx (EC2-A)
-├─ Request 2 → logged by 10.0.2.xxx (EC2-B)
-├─ Request 3 → logged by 10.0.1.xxx (EC2-A)
-├─ Request 4 → logged by 10.0.2.xxx (EC2-B)
-... (50/50 alternating pattern) ✅
-
-This proves Round Robin load balancing works!
+To verify:
+1. Refresh page 10 times
+2. Check ALB access logs (if enabled) to see which instances got requests
+3. Should see equal distribution ✅
 ```
 
-**TEST 4: Verify Multi-AZ Failover (Optional advanced test):**
+**TEST 4: Test Auto Scaling (Optional Advanced):**
 
 ```
-1. STOP EC2-A (temporarily):
-   AWS Console → EC2 → Instances → Stop Instance i-082cbe43b6ba19a6e
+SCENARIO 1: Scale UP (High Load)
+1. SSH to ASG instance and generate CPU load:
+   stress --cpu 4 --timeout 300s
 
-2. Refresh ALB page in browser:
-   http://Group3-OpenCart-ALB-XXX.amazonaws.com
+2. Watch CloudWatch metrics (should reach > 70% CPU)
 
-Expected:
-✅ Website still loads (no downtime!)
-✅ EC2-B serving all traffic (100%)
-✅ Proves Multi-AZ works!
+3. Auto Scaling will AUTOMATICALLY add a 3rd instance!
+   AWS Console → Auto Scaling Groups → Group3-OpenCart-ASG
+   → Activity tab (watch instance being launched)
 
-3. START EC2-A again:
-   AWS Console → Instances → Start Instance
+4. After 5-10 minutes (cooldown period), a 3rd instance launches
+   Instances count: 2 → 3 ✅
+
+5. Load is distributed across 3 instances
+   CPU drops back to ~70% (target)
+
+SCENARIO 2: Scale DOWN (Low Load)
+1. Stop the stress test: killall stress
+
+2. CPU drops below 70%
+
+3. After 10+ minutes idle, ASG scales down to 1 instance
+   Instances count: 3 → 1
    
-4. Wait 30 sec for health checks to pass
-5. Refresh page again - traffic should rebalance 50/50
+4. Save money! Fewer running instances ✅
+```
+
+**TEST 5: Multi-AZ Failover:**
+
+```
+Test that traffic survives instance failure:
+
+1. Stop one ASG instance:
+   AWS Console → EC2 → Instances → Stop instance
+
+2. ALB health check detects it's down (within 30-60 sec)
+
+3. Traffic automatically reroutes to healthy instance ✅
+
+4. After health check failure:
+   Auto Scaling detects unhealthy instance
+   Automatically terminates it
+   Launches replacement instance ✅
+
+5. Website continues running (zero downtime!)
 ```
 
 ---
@@ -2602,11 +2878,26 @@ Expected:
 **✅ FINAL DAY 1 VERIFICATION CHECKLIST:**
 
 ```
+LAUNCH TEMPLATE:
+☑ Group3-OpenCart-Template created
+☑ Based on working EC2-A instance
+☑ Instance type: t2.micro
+☑ Security groups: Group3_WebServer_SG
+☑ Resource tags: Propagate enabled
+
+AUTO SCALING GROUP:
+☑ Group3-OpenCart-ASG created
+☑ Template: Group3-OpenCart-Template ✅
+☑ Desired: 2 instances (currently running)
+☑ Min: 1, Max: 4
+☑ Subnets: 1a + 1b (Multi-AZ) ✅
+☑ Scaling Policy: CPU-based (70% target) ✅
+☑ Instances launched: 2 running
+
 TARGET GROUP:
 ☑ Group3-OpenCart-TG created
-☑ EC2-A: Status = Healthy ✅
-☑ EC2-B: Status = Healthy ✅
 ☑ Port: 80
+☑ Targets: 2 instances from ASG (both Healthy) ✅
 
 APPLICATION LOAD BALANCER:
 ☑ Group3-OpenCart-ALB created
@@ -2621,44 +2912,48 @@ SECURITY GROUPS:
 ☑ EC2s: Can reach RDS MySQL on port 3306 ✅
 
 CONFIG FILES:
-☑ EC2-A config.php: HTTP_SERVER = ALB DNS ✅
-☑ EC2-A admin/config.php: All URLs = ALB DNS ✅
-☑ EC2-B config.php: HTTP_SERVER = ALB DNS ✅
-☑ EC2-B admin/config.php: All URLs = ALB DNS ✅
+☑ Both ASG instances: HTTP_SERVER = ALB DNS ✅
+☑ Both ASG instances: Admin URLs = ALB DNS ✅
 
 WEBSITE TESTING:
 ☑ Access via ALB: Works ✅
 ☑ Full OpenCart theme displays ✅
 ☑ No CSS/JS 404 errors ✅
-☑ Load balancing: Round Robin distribution ✅
-☑ Direct EC2 IPs: Blocked by SG (as intended) ✅
+☑ Load balancing: Traffic distributed ✅
+☑ Auto-scaling: CPU > 70% → scales up ✅
+☑ Auto-scaling: CPU < 30% → scales down ✅
+☑ Failover: Down instance → auto-replaced ✅
 
-INFRASTRUCTURE:
-☑ 2 EC2 instances in different AZs (1a, 1b) ✅
-☑ 1 RDS database (Single-AZ, in 1a) ✅
-☑ Both EC2s can connect to RDS (cross-AZ) ✅
-☑ ALB distributes 50/50 traffic ✅
-☑ Automatic failover works (stop one EC2, traffic routes to other) ✅
+INFRASTRUCTURE CAPABILITIES:
+☑ 2-4 EC2 instances automatically managed
+☑ Multi-AZ deployment (1a, 1b)
+☑ Automatic failover on instance health failure
+☑ Automatic scaling based on CPU load
+☑ Cost-optimized: scales down when idle
+☑ Zero-downtime deployments (rolling updates)
 ```
 
-**⏱️ HOUR 4-5 TOTAL TIME:** 20-30 minutes
+**⏱️ HOUR 4-5 TOTAL TIME:** 30-40 minutes (with Auto Scaling)
 
-**🎉 END OF DAY 1!**
+**🎉 END OF DAY 1 - PRODUCTION-READY INFRASTRUCTURE!**
 
 ```
 DAY 1 ACHIEVEMENTS:
 ✅ GitHub repository setup (OpenCart code pushed)
-✅ Multi-AZ deployment (EC2-A in 1a, EC2-B in 1b)
+✅ Multi-AZ Auto Scaling (1-4 instances)
 ✅ Application Load Balancer (traffic distribution)
+✅ Auto-healing (failed instances auto-replaced)
+✅ Auto-scaling policies (CPU-based)
 ✅ Health checks (automatic failover)
 ✅ Config files updated (ALB DNS integration)
 ✅ Load balancing verified (Round Robin)
+✅ Scaling verified (high load → scale up)
 ✅ Zero-downtime failover tested
 
 READY FOR DAY 2:
 → S3 for static assets (images)
 → CloudFront CDN (global distribution)
-→ Database sessions (cross-EC2 sharing)
+→ Database sessions (cross-instance sharing)
 → CI/CD pipeline (GitHub Actions)
 ```
 
@@ -2672,7 +2967,7 @@ git add docs/
 git add infrastructure/
 
 # Commit
-git commit -m "Day 1 Complete: Multi-AZ ALB deployment with config updates"
+git commit -m "Day 1 Complete: Multi-AZ Auto Scaling with ALB & config updates"
 
 # Push
 git push origin main
@@ -2689,7 +2984,7 @@ echo "✅ Day 1 progress saved to GitHub!"
 - ✅ Enable CloudFront CDN for global distribution (400+ edge locations)
 - ✅ Setup IAM roles for secure EC2→S3 access (no hardcoded credentials!)
 - ✅ Integrate AWS SDK into OpenCart for automatic S3 uploads
-- ✅ Configure database sessions for cross-EC2 state sharing
+- ✅ Configure database sessions for cross-instance state sharing
 - ✅ Test Multi-AZ session persistence
 
 **⏰ TIMELINE:** 5 hours (9:00-14:00)
