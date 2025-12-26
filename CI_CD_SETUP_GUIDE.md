@@ -1,119 +1,190 @@
-# 🔧 CI/CD SETUP GUIDE - GitHub Secrets & EC2 Configuration
+# 🔧 CI/CD SETUP GUIDE - Deploy Tới Tất Cả ASG Instances (Cách 1)
 
 ## 📋 Tóm Tắt Nhanh
 
-**File workflow đã fixed:** `.github/workflows/deploy.yml` ✅
-**Method:** SSH trực tiếp (đơn giản, không cần IAM phức tạp)
-**Yêu cầu:** 2 GitHub Secrets + Git config trên EC2
+**File workflow:** `.github/workflows/deploy.yml` ✅  
+**Method:** AWS SSM + Auto Scaling Group  
+**Deploy Mode:** **TẤT CẢ instances trong ASG cùng lúc**
+
+**Lợi ích:**
+- ✅ Push code 1 lần → tất cả instances update (2, 3, 4, hay bao nhiêu instances cũng được)
+- ✅ Instance mới scale up sẽ tự động nhận latest code  
+- ✅ Không cần hardcode instance IDs
+- ✅ Production-ready (automatic & reliable)
 
 ---
 
-## 🔑 STEP 1: Lấy EC2 Host (Public IP)
+## 📝 Workflow Logic
+
+```
+Push code to main branch
+    ↓
+GitHub Actions detects push
+    ↓
+AWS CLI retrieves all ASG instances
+    ↓
+SSM send-command to all instances (parallel):
+  - Instance 1: git pull + restart
+  - Instance 2: git pull + restart
+  - Instance 3: git pull + restart (nếu scale up)
+    ↓
+Tất cả instances cập nhật code ✅
+```
+
+---
+
+## 🔧 SETUP STEPS (7 bước, ~30 phút)
+
+### **STEP 1: Tạo AWS IAM User Cho GitHub Actions**
 
 **AWS Console:**
 ```
-1. EC2 → Instances
-2. Chọn 1 instance (hoặc bất kỳ ASG instance nào)
-3. Tìm "Public IPv4 address"
-   VD: 13.251.156.78
+1. Go to: https://console.aws.amazon.com/iam/
+2. Left sidebar → Users
+3. Click "Create user"
+4. Username: github-actions-deployer
+5. Click "Next"
+6. Select "Attach policies directly"
 ```
 
-**Lưu giữ giá trị này → Dùng cho EC2_HOST secret**
+### **Attach Required Policies:**
+
+**Policy 1: SSM Access**
+```
+Search box: "AmazonSSMFullAccess"
+Click checkbox next to it
+```
+
+**Policy 2: Auto Scaling Access**
+```
+Search box: "AutoScalingFullAccess"  
+Click checkbox next to it
+```
+
+**Click "Create user" button**
 
 ---
 
-## 🔑 STEP 2: Lấy EC2 SSH Private Key
+### **STEP 2: Generate Access Keys**
+
+**AWS Console (Tiếp tục):**
+```
+1. Click on user "github-actions-deployer"
+2. Click "Security credentials" tab
+3. Scroll down → "Access keys"
+4. Click "Create access key"
+5. Select "Command Line Interface (CLI)"
+6. Click checkbox "I understand the above recommendation"
+7. Click "Create access key"
+```
+
+**📥 Download CSV file immediately:**
+```
+Click "Download .csv file"
+Save to your computer
+```
+
+**File CSV content example:**
+```
+User name,Access key ID,Secret access key
+github-actions-deployer,AKIA1234567890AB,wJalrXUtnFEMI/K7MDENG/ExampleKey
+```
+
+⚠️ **Save this file - you'll need it!**
+
+---
+
+### **STEP 3: Add AWS Credentials to GitHub Secrets**
+
+**Go to GitHub:**
+```
+1. Your repository
+2. Settings tab
+3. Left sidebar → "Secrets and variables" → "Actions"
+4. Click "New repository secret"
+```
+
+**Add Secret 1:**
+```
+Name: AWS_ACCESS_KEY_ID
+Value: AKIA... (copy from CSV file, first value)
+Click "Add secret"
+```
+
+**Add Secret 2:**
+```
+Name: AWS_SECRET_ACCESS_KEY  
+Value: wJalr... (copy from CSV file, second value)
+Click "Add secret"
+```
+
+⚠️ **Copy from CSV file exactly - don't miss any characters!**
+
+---
+
+### **STEP 4: Configure EC2 IAM Role (For ASG Instances)**
 
 **AWS Console:**
 ```
-1. EC2 → Key Pairs
-2. Tìm key pair bạn dùng (VD: Group3-Key.pem, project.pem)
-3. Click Download key pair
-4. Mở file .pem bằng Notepad/VS Code
-5. Copy TẤT CẢ content
+1. Go to: https://console.aws.amazon.com/iam/
+2. Left sidebar → Roles
+3. Find role: "Group3_EC2_S3_Role" (or your EC2 role)
+4. Click on it
 ```
 
-**Ví dụ nội dung file .pem:**
+**Add SSM Permission:**
 ```
------BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUtbm9uZS1ub25lAAAAAA...
-... (hàng dài ký tự)
------END OPENSSH PRIVATE KEY-----
-```
-
-**Copy từ BEGIN đến END**
-
----
-
-## 🔐 STEP 3: Thêm GitHub Secrets
-
-**Trên GitHub Repository:**
-
-```
-1. Repository → Settings (tab)
-2. Sidebar → "Secrets and variables" → "Actions"
-3. Click "New repository secret"
+1. Click "Add permissions" → "Attach policies directly"
+2. Search: "AmazonSSMManagedInstanceCore"
+3. Click checkbox
+4. Click "Add permissions"
 ```
 
-### Secret 1: EC2_HOST
-
+**Verify Role Has:**
 ```
-Name: EC2_HOST
-Value: 13.251.156.78 (hoặc IP của bạn)
-Click "Add secret"
-```
-
-### Secret 2: EC2_SSH_KEY
-
-```
-Name: EC2_SSH_KEY
-Value: (Paste toàn bộ content từ .pem file)
-
-⚠️ IMPORTANT:
-- Bắt đầu: -----BEGIN OPENSSH PRIVATE KEY-----
-- Kết thúc: -----END OPENSSH PRIVATE KEY-----
-- Copy tất cả, không bỏ dòng nào
-
-Click "Add secret"
+✅ AmazonSSMManagedInstanceCore (for SSM)
+✅ AmazonEC2FullAccess or AmazonS3FullAccess (existing)
 ```
 
 ---
 
-## 🔧 STEP 4: Cấu Hình Git Trên EC2
+### **STEP 5: Configure Git on EC2**
 
-**SSH vào 1 trong 2 EC2 instances:**
+**SSH vào 1 trong các ASG instances:**
 
 ```bash
-ssh -i your-key.pem ec2-user@13.251.156.78
+# Get EC2 public IP from AWS Console
+# EC2 → Instances → find Group3-OpenCart-ASG instance → copy Public IPv4 address
+
+ssh -i your-key.pem ec2-user@YOUR-EC2-PUBLIC-IP
 ```
 
-**Chạy các lệnh sau:**
+**Run these commands:**
 
 ```bash
-# 1. Cài Git (nếu chưa có)
-sudo yum update -y
+# 1. Install Git (nếu chưa có)
 sudo yum install -y git
 
-# 2. Vào thư mục OpenCart
+# 2. Go to OpenCart directory
 cd /var/www/html
 
-# 3. Cấu hình Git
+# 3. Configure Git
 sudo git config --global user.email "github-actions@example.com"
 sudo git config --global user.name "GitHub Actions"
 
-# 4. Khởi tạo repository (nếu chưa có)
+# 4. Initialize Git repository
 sudo git init
 sudo git remote add origin https://github.com/WEKONE-26/opencart-aws-group3.git
 
-# 5. Lấy code từ main branch
+# 5. Fetch and checkout main branch
 sudo git fetch origin main
 sudo git checkout main
 
-# 6. Cấp quyền cho Apache
+# 6. Set permissions
 sudo chown -R apache:apache /var/www/html
 sudo chmod -R 755 /var/www/html
 
-# 7. Tạo log file cho deployment tracking
+# 7. Create deployment log file
 sudo touch /var/log/deployment.log
 sudo chmod 666 /var/log/deployment.log
 
@@ -123,208 +194,243 @@ exit
 
 ---
 
-## ✅ STEP 5: Test Deployment Đầu Tiên
+### **STEP 6: Test Deployment**
 
-**Cách A: Push code tự động trigger**
+**Option A: Push code to trigger workflow**
 
 ```powershell
-# Trên máy local
+# On your local machine
 cd your-repo-folder
 
-# Edit 1 file bất kỳ
-echo "Test CI/CD" >> README.md
+# Make a small change
+echo "Test CI/CD ASG deployment" >> README.md
 
-# Commit và push
-git add .
-git commit -m "Test: Trigger CI/CD deployment"
+# Commit and push
+git add README.md
+git commit -m "Test: Trigger CI/CD ASG deployment"
 git push origin main
 
-# GitHub Actions sẽ tự động chạy!
+# GitHub Actions will automatically trigger!
 ```
 
-**Cách B: Manual trigger từ GitHub UI**
+**Option B: Manual trigger from GitHub UI**
 
 ```
 1. GitHub → Actions tab
-2. Click "Deploy OpenCart to EC2" workflow
+2. Click "Deploy OpenCart to ASG (All Instances)"
 3. Click "Run workflow"
-4. Chọn branch "main"
+4. Select branch "main"
 5. Click "Run workflow"
 ```
 
 ---
 
-## 📊 STEP 6: Kiểm Tra Kết Quả
+### **STEP 7: Monitor Deployment**
 
-**Trên GitHub Actions:**
-
+**On GitHub Actions:**
 ```
-1. GitHub → Actions → Latest run
-2. Xem status:
-   🟡 Yellow = Đang chạy
-   🟢 Green = Thành công ✅
-   🔴 Red = Lỗi ❌
-3. Click vào run để xem logs
-```
-
-**Trên Website:**
-
-```
-1. Mở: http://Group3-OpenCart-ALB-XXXX.ap-southeast-1.elb.amazonaws.com
-2. F5 refresh
-3. Xem file bạn vừa edit → Nếu thấy thì deployment thành công ✅
+1. Repository → Actions tab
+2. See latest workflow run
+3. Status:
+   🟡 Yellow = Running
+   🟢 Green = Success ✅
+   🔴 Red = Error ❌
 ```
 
-**Trên EC2 Instance:**
+**Click workflow to see logs:**
+```
+- "Get all ASG instances" → shows which instances found
+- "Deploy code to all ASG instances" → deployment output
+- "Deployment Summary" → final status
+```
 
+**On Website:**
+```
+1. Open ALB DNS: http://Group3-OpenCart-ALB-XXXX.ap-southeast-1.elb.amazonaws.com
+2. Refresh (F5)
+3. Check if changes visible
+4. If yes → deployment successful ✅
+```
+
+**Check EC2 Logs:**
 ```bash
-# SSH vào EC2
-ssh -i your-key.pem ec2-user@13.251.156.78
+# SSH to any ASG instance
+ssh -i your-key.pem ec2-user@YOUR-EC2-IP
 
-# Xem deployment logs
-tail -20 /var/log/deployment.log
+# View deployment logs
+tail -50 /var/log/deployment.log
 
-# Output sẽ như:
-# ✅ Deployment completed at Thu Dec 26 10:45:32 UTC 2025
-# ✅ Deployment completed at Thu Dec 26 10:46:15 UTC 2025
+# Output example:
+# === Deploying to ASG Instance ===
+# ✅ Deployment completed at Thu Dec 26 11:45:32 UTC 2025
+# ✅ Deployment completed at Thu Dec 26 11:46:15 UTC 2025
 ```
 
 ---
 
 ## 🚨 TROUBLESHOOTING
 
-### ❌ Error: "Permission denied (publickey)"
+### ❌ Error: "InvalidParameterValue" / "Instances not found"
 
 ```
-Nguyên Nhân: EC2_SSH_KEY sai
+Nguyên Nhân: ASG name sai hoặc không có instances
 
 Cách Fix:
-1. GitHub → Settings → Secrets
-2. Delete old EC2_SSH_KEY
-3. Copy lại .pem file (copy từ BEGIN đến END)
-4. Thêm EC2_SSH_KEY mới
-5. Trigger workflow lại
+1. AWS Console → Auto Scaling Groups
+2. Verify ASG name: "Group3-OpenCart-ASG" ✅
+3. Verify instances running (Desired: 2, Running: 2)
+4. Trigger workflow lại
 ```
 
-### ❌ Error: "Could not resolve hostname"
+### ❌ Error: "AccessDenied" / "UnauthorizedOperation"
 
 ```
-Nguyên Nhân: EC2_HOST IP sai
+Nguyên Nhân: AWS credentials không có SSM permissions
 
 Cách Fix:
-1. AWS Console → EC2 → Instances
-2. Copy "Public IPv4 address" chính xác
+1. AWS IAM → Users → github-actions-deployer
+2. Verify policies: AmazonSSMFullAccess ✅
 3. GitHub → Settings → Secrets
-4. Edit EC2_HOST
+4. Verify both secrets are set correctly
 5. Trigger workflow lại
 ```
 
-### ❌ Error: "fatal: Not a git repository"
+### ❌ Error: "SSMInstanceNotExistException"
 
 ```
-Nguyên Nhân: EC2 chưa init Git
+Nguyên Nhân: EC2 instances không có SSM agent permission
 
 Cách Fix:
-1. SSH vào EC2
-2. Run STEP 4 lại
-3. Trigger workflow lại
+1. AWS IAM → Roles → Group3_EC2_S3_Role
+2. Add policy: AmazonSSMManagedInstanceCore
+3. Terminate old ASG instances (force new ones to launch)
+4. Wait 2 minutes for new instances to start SSM agent
+5. Trigger workflow lại
 ```
 
-### ❌ Error: "permission denied" trên /var/www/html
+### ❌ Error: "git: not found"
 
 ```
-Nguyên Nhân: Apache không có quyền
+Nguyên Nhân: EC2 không cài git
 
 Cách Fix:
-1. SSH vào EC2
-2. Chạy:
-   sudo chown -R apache:apache /var/www/html
-   sudo chmod -R 755 /var/www/html
-3. Trigger workflow lại
+1. SSH to EC2
+2. Run: sudo yum install -y git
+3. Run STEP 5 lại (git config + init)
+4. Trigger workflow lại
 ```
 
 ---
 
-## 📋 CHECKLIST HOÀN THÀNH
+## ✅ COMPLETION CHECKLIST
 
 ```
+AWS IAM Setup:
+☐ github-actions-deployer user created
+☐ AmazonSSMFullAccess attached
+☐ AutoScalingFullAccess attached  
+☐ Access keys downloaded (CSV file saved)
+
 GitHub Secrets:
-☐ EC2_HOST added (public IP)
-☐ EC2_SSH_KEY added (full .pem content)
+☐ AWS_ACCESS_KEY_ID set
+☐ AWS_SECRET_ACCESS_KEY set
+
+EC2 IAM Role:
+☐ AmazonSSMManagedInstanceCore attached to Group3_EC2_S3_Role
 
 EC2 Configuration:
-☐ Git installed
-☐ Git repository initialized
-☐ Git user configured
+☐ Git installed on at least 1 ASG instance
+☐ Git repository initialized (/var/www/html)
 ☐ Main branch checked out
-☐ Permissions set (apache:apache)
-☐ Log file created
+☐ Permissions set (apache:apache, 755)
+☐ Log file created (/var/log/deployment.log)
 
 Testing:
-☐ First deployment triggered
-☐ GitHub Actions workflow ✅ (green)
+☐ First deployment triggered (push or manual)
+☐ GitHub Actions workflow runs ✅ (green)
+☐ Logs show "Deploying to ASG Instance"
 ☐ Website shows changes
-☐ Logs show "Deployment completed"
+☐ All instances in ASG received update
 
-✅ CI/CD READY!
+✅ CI/CD FOR ASG READY!
 ```
 
 ---
 
-## 📝 Quy Trình Hằng Ngày
+## 📊 DAILY WORKFLOW (After Setup)
 
-Sau khi setup xong, cách bạn deploy mỗi ngày:
+**Every day, deploy code like this:**
 
 ```bash
-# 1. Edit file trên local
-# VD: sửa catalog/controller/common/home.php
+# 1. Edit file on local machine
+# Example: catalog/controller/common/home.php
 
-# 2. Commit và push
+# 2. Test locally (if you have Docker/XAMPP)
+
+# 3. Commit and push
 git add .
-git commit -m "Fix: Homepage display issue"
+git commit -m "Feature: Add new product filter"
 git push origin main
 
-# 3. ✅ DONE! GitHub Actions tự động deploy trong 1-2 phút
-#    Không cần SSH, không cần thủ công gì khác!
-```
+# 4. ✅ DONE! 
+#    GitHub Actions automatically:
+#    - Detects push
+#    - Gets all ASG instances
+#    - Deploys to ALL instances in parallel
+#    - Website updates in 1-2 minutes
 
-**Kiểm tra:**
-- GitHub Actions → xem workflow ✅
-- Website → F5 → thấy thay đổi ✅
-- Done!
+# 5. Verify
+#    - Check GitHub Actions logs ✅
+#    - Refresh website, see changes ✅
+```
 
 ---
 
-## 🎯 Tóm Tắt CI/CD
+## 🎯 ASG Scale-Up Scenario
 
-| Vấn Đề | Chi Tiết |
-|--------|----------|
-| **Setup Time** | ~30 phút (lần đầu) |
-| **Deploy Time** | 1-2 phút (tự động) |
-| **Manual Work** | git add → git commit → git push |
-| **Tất Cả Instances** | ASG tự động update (bao nhiêu instances cũng được) |
-| **Rollback** | git revert + git push (1 phút) |
-| **Cost** | Miễn phí (GitHub Actions free tier) |
+**What happens when new instance launches:**
+
+```
+Current state: 2 instances (i-111, i-222) both with OpenCart
+
+Auto Scaling triggers → New instance i-333 launches
+    ↓
+New instance i-333 starts with same AMI (has code)
+    ↓
+But code might be slightly old (AMI was created N hours ago)
+    ↓
+Next time you git push → workflow runs
+    ↓
+SSM discovers: 3 instances now (i-111, i-222, i-333)
+    ↓
+Deploys to ALL 3 at once → ALL get latest code ✅
+    ↓
+New instance i-333 is now in sync with i-111 and i-222 ✅
+```
+
+**Result:** Scales up don't cause out-of-sync issues!
 
 ---
 
-## ✨ Workflow Logic
+## 💡 KEY DIFFERENCES: SSH vs SSM
 
-```
-Push code to main branch
-    ↓
-GitHub Actions detects push
-    ↓
-Workflow runs:
-  1. Checkout code
-  2. Connect to EC2 via SSH
-  3. cd /var/www/html
-  4. git fetch origin main
-  5. git reset --hard origin/main (update files)
-  6. systemctl restart httpd (restart Apache)
-  7. Log output
-    ↓
-Website automatically updated ✅
-All instances in ASG get same code ✅
-Customers see changes immediately ✅
-```
+| Aspect | SSH (Old) | SSM (New - Cách 1) |
+|--------|-----------|------------------|
+| **Targets** | 1 hardcoded IP | All ASG instances |
+| **Scale-up** | Manual SSH each time | Auto-detected |
+| **Setup** | SSH key | AWS credentials |
+| **Security** | Requires SSH access | Uses IAM + AWS credentials |
+| **Reliability** | Single point of failure | Parallel deployment |
+| **Cost** | Free | Free (included in AWS) |
+
+---
+
+## 🚀 You're Ready!
+
+Your CI/CD can now:
+- ✅ Deploy to 2 instances
+- ✅ Deploy to 3 instances (if scaled)
+- ✅ Deploy to 10 instances (no extra setup!)
+- ✅ Handle new instances automatically
+
+**Push code once → All instances update automatically!** 🎉
