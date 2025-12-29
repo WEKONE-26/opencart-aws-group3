@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ﻿/vendor/
 /system/storage/
 /image/
@@ -8,3 +9,13 @@ admin/config.php
 catalog/config.php
 .DS_Store
 *.log
+=======
+﻿config.php
+admin/config.php
+*.pem
+*.key
+system/storage/cache/*
+system/storage/logs/*
+image/cache/*
+install/
+>>>>>>> 5744f9773d1e24d1faf8decb733a46fd9f60c4a7
